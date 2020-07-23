@@ -1,0 +1,24 @@
+Major:
+    Client Interface:
+        implement client interface 
+
+    MetaData Server:
+        handle command requests(ie filestat, getdiskcap etc.) from client to metadata server 
+
+    Chunk Server:
+        handle command requests(ie read, write.) from client to chunk server
+
+    Data Replication:
+        implement algorithm for creating copies of file chunk entries recorded in master server
+
+    Node Allocation:
+        implement node selection algorithm for replication file chunks 
+
+    Testing:
+        implement tests for all modules - client, servers.
+         
+Minor:
+    Bug Fixes:
+        our dear sweeties :)
+
+Lastly God Help us
