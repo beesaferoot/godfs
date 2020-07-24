@@ -22,7 +22,7 @@ type FileEntry interface {
 	Rename(string)
 	GetSize() int
 	StopNode(int)
-	Write(int, []Copy)
+	Write(int, *[]Copy)
 	Name() string
 	Date() time.Time
 	getChunks() []ChunkEntry
@@ -39,11 +39,12 @@ type MetaServer interface {
 	Rename(string, string) error
 	FileSize(string) int
 	FileStat(string) (string, error)
+	ListFiles() string
 	Read(string) ([]ChunkEntry, error)
 	Write(string) FileEntry
 	stopNode() int
 	GetDiskCap() int
-	sendMsg(Message) error
+	sendMsg(*Message) error
 	UpdateDiskCap()
 	GetNodeStat(interface{}) string
 	nodeStatByID(int) string
@@ -61,6 +62,8 @@ type MasterNode struct {
 	nodeMap    [][]int //predefined datastore nodes to be used
 	files      map[string]FileEntry
 	PORT       int
+	encoder    *gob.Encoder
+	decoder    *gob.Decoder
 }
 
 func (f *File) Rename(newFileName string) {
@@ -77,10 +80,10 @@ func (f *File) StopNode(nodeID int) {
 	}
 }
 
-func (f *File) Write(nodeID int, copies []Copy) {
+func (f *File) Write(nodeID int, copies *[]Copy) {
 	var chunkEntry ChunkMetadata
 	chunkEntry.index = nodeID
-	chunkEntry.copies = copies
+	chunkEntry.copies = *copies
 	f.chunks = append(f.chunks, &chunkEntry)
 }
 
@@ -137,7 +140,7 @@ func NewMasterNode(serverName string, serverConfig map[string]interface{}) *Mast
 			log.Fatalln("invalid type for nodes value, expected an interger")
 		}
 	} else {
-		fmt.Printf("using default nodes size: %d\n", DefaultConfig["nodes"])
+		fmt.Printf("using default nodes: %d\n", DefaultConfig["nodes"])
 		newMasterNode.ROW = DefaultConfig["nodes"]
 	}
 
@@ -149,14 +152,24 @@ func NewMasterNode(serverName string, serverConfig map[string]interface{}) *Mast
 
 }
 
-func (m *MasterNode) sendMsg(msg Message) error {
+func (m *MasterNode) ListFiles() string {
+	var fileString string
+	if len(m.files) == 0 {
+		return fileString
+	}
+	for _, entry := range m.files {
+		fileString += fmt.Sprintf("%s  ", entry.Name())
+	}
+	return fileString
+}
+func (m *MasterNode) sendMsg(msg *Message) error {
 	conn, err := net.Dial("tcp", fmt.Sprintf(":%s", os.Getenv("CHUNK_SERVER_PORT")))
 	defer conn.Close()
 	if err != nil {
 		return err
 	}
-	enc := gob.NewEncoder(conn)
-	err = enc.Encode(msg)
+	m.encoder = gob.NewEncoder(conn)
+	err = m.encoder.Encode(msg)
 	if err != nil {
 		return fmt.Errorf("Error: could not accept incomming request: %v", err.Error())
 	}
@@ -201,9 +214,9 @@ func (m *MasterNode) FileStat(filename string) (string, error) {
 
 	if entry, ok := m.files[filename]; ok {
 		return fmt.Sprintf(
-			`file name: \t%s
-			 created: \t%v
-			 size: \t%d`, entry.Name(), entry.Date(), entry.GetSize()), nil
+			`file name:   %s
+             created:     %v
+             size:        %d bytes`, entry.Name(), entry.Date(), entry.GetSize()), nil
 	}
 	return "", fmt.Errorf("file does not exist")
 }
@@ -255,6 +268,7 @@ func (m *MasterNode) Write(filename string) FileEntry {
 		return entry
 	}
 	var entry FileEntry = &File{name: filename}
+	m.files[entry.Name()] = entry
 	return entry
 
 }
@@ -274,23 +288,81 @@ func (m *MasterNode) Run() {
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		m.handleConnection(conn)
+		m.encoder = gob.NewEncoder(conn)
+		m.decoder = gob.NewDecoder(conn)
+		go m.handleConnection(conn)
 
 	}
 
 }
 
 func (m *MasterNode) handleConnection(conn net.Conn) {
-	buf := make([]byte, m.CHUNKSIZE)
+
 	defer conn.Close()
+	var msg Message
+	var err error
 	for {
-		n, err := conn.Read(buf)
+		err = m.decoder.Decode(&msg)
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			log.Fatalln(err.Error())
+			log.Println("decode error: ", err.Error())
+			m.encoder.Encode(err.Error())
+			break
 		}
-		fmt.Println(string(buf[:n]))
+		m.handleClientCommands(&msg)
+
+	}
+
+}
+
+func (m *MasterNode) handleClientCommands(msg *Message) {
+	switch msg.Command {
+	case "stat":
+		stat, err := m.FileStat(msg.Args[0])
+		if err != nil {
+			_ = m.encoder.Encode(err.Error())
+			log.Println(err.Error())
+		}
+		_ = m.encoder.Encode(stat)
+		log.Println(stat)
+		break
+	case "ls":
+		_ = m.encoder.Encode(m.ListFiles())
+		log.Println(m.ListFiles())
+		break
+	case "dc":
+		_ = m.encoder.Encode(fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap()))
+		log.Println(fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap()))
+		break
+	case "rn":
+		err := m.Rename(msg.Args[0], msg.Args[1])
+		if err != nil {
+			_ = m.encoder.Encode(err.Error())
+			log.Println(err.Error())
+			break
+		}
+		break
+	case "r":
+		filename := msg.Args[0]
+		entries, err := m.Read(filename)
+		if err != nil {
+			_ = m.encoder.Encode(err.Error())
+			log.Printf("%v\n", entries)
+			break
+		}
+		_ = m.encoder.Encode(entries)
+		log.Printf("%v\n", entries)
+		break
+	case "w":
+		filename := msg.Args[0]
+		entry := m.Write(filename)
+		_ = m.encoder.Encode(entry)
+		log.Printf("%v\n", entry)
+		break
+	default:
+		_ = m.encoder.Encode(fmt.Errorf("%s is not a valid command", msg.Command))
+		break
 	}
 }
