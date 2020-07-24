@@ -58,7 +58,7 @@ type MasterNode struct {
 	CHUNKSIZE  int
 	ROW        int
 	COLUMN     int
-	nodeMap    [4][2]int //predefined datastore nodes to be used
+	nodeMap    [][]int //predefined datastore nodes to be used
 	files      map[string]FileEntry
 	PORT       int
 }
@@ -85,8 +85,8 @@ func (f *File) Write(nodeID int, copies []Copy) {
 }
 
 func (f *File) Read() []ChunkEntry {
-	
-	return getChunks() 
+
+	return f.getChunks()
 }
 
 func (f *File) Date() time.Time {
@@ -97,41 +97,52 @@ func (f *File) Name() string {
 	return f.name
 }
 
-func (f *File) GetChunks() []ChunkEntry {
+func (f *File) getChunks() []ChunkEntry {
 	return f.chunks
 }
 
 func NewMasterNode(serverName string, serverConfig map[string]interface{}) *MasterNode {
 	var DefaultConfig = map[string]int{}
-	DefaultConfig["CHUNKSIZE"] = 100
-	DefaultConfig["PORT"] = 5000
-	DefaultConfig["NODES"] = 4
+	DefaultConfig["chunksize"] = 100
+	DefaultConfig["port"] = 5000
+	DefaultConfig["nodes"] = 4
 	var newMasterNode = MasterNode{serverName: serverName}
 
-	if val, ok := serverConfig["PORT"]; ok {
+	if val, ok := serverConfig["port"]; ok {
 		if port, ok := val.(int); ok {
 			newMasterNode.PORT = port
 		} else {
-			log.Fatal("invalid type for server port value, expected an integer")
+			log.Fatalln("invalid type for server port value, expected an integer")
 		}
 	} else {
-		fmt.Printf("using default port: %d\n", DefaultConfig["PORT"])
-		newMasterNode.PORT = DefaultConfig["PORT"]
+		fmt.Printf("using default port: %d\n", DefaultConfig["port"])
+		newMasterNode.PORT = DefaultConfig["port"]
 	}
 
-	if val, ok := serverConfig["CHUNKSIZE"]; ok {
+	if val, ok := serverConfig["chunksize"]; ok {
 		if chunkSize, ok := val.(int); ok {
 			newMasterNode.CHUNKSIZE = chunkSize
 		} else {
-			log.Fatal("invalid type for chunksize value, expected an integer")
+			log.Fatalln("invalid type for chunksize value, expected an integer")
 		}
 	} else {
-		fmt.Printf("using default chunksize: %d\n", DefaultConfig["CHUNKSIZE"])
-		newMasterNode.CHUNKSIZE = DefaultConfig["CHUNKSIZE"]
+		fmt.Printf("using default chunksize: %d\n", DefaultConfig["chunksize"])
+		newMasterNode.CHUNKSIZE = DefaultConfig["chunksize"]
 	}
 
-	for _, node := range newMasterNode.nodeMap {
-		node[1] = newMasterNode.CHUNKSIZE
+	if val, ok := serverConfig["nodes"]; ok {
+		if totalnodes, ok := val.(int); ok {
+			newMasterNode.ROW = totalnodes
+		} else {
+			log.Fatalln("invalid type for nodes value, expected an interger")
+		}
+	} else {
+		fmt.Printf("using default nodes size: %d\n", DefaultConfig["nodes"])
+		newMasterNode.ROW = DefaultConfig["nodes"]
+	}
+
+	for i := 0; i < newMasterNode.ROW; i++ {
+		newMasterNode.nodeMap = append(newMasterNode.nodeMap, []int{0, newMasterNode.CHUNKSIZE})
 	}
 	newMasterNode.files = map[string]FileEntry{}
 	return &newMasterNode
@@ -278,7 +289,7 @@ func (m *MasterNode) handleConnection(conn net.Conn) {
 			if err == io.EOF {
 				break
 			}
-			log.Fatal(err.Error())
+			log.Fatalln(err.Error())
 		}
 		fmt.Println(string(buf[:n]))
 	}

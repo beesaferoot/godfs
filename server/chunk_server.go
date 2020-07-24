@@ -96,8 +96,7 @@ func (c *ChunkMetadata) stopNode(nodeID int) {
 }
 
 func (c *ChunkMetadata) Read() []Copy {
-	return c.copies, nil
-
+	return c.copies
 }
 
 func (c *ChunkServer) sendMsg(msg Message) error {
