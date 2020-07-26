@@ -26,6 +26,7 @@ type FileEntry interface {
 	Name() string
 	Date() time.Time
 	getChunks() []ChunkEntry
+	DeleteChunks()
 }
 
 type File struct {
@@ -88,8 +89,11 @@ func (f *File) Write(nodeID int, copies *[]Copy) {
 }
 
 func (f *File) Read() []ChunkEntry {
-
 	return f.getChunks()
+}
+
+func (f *File) DeleteChunks() {
+	f.chunks = f.chunks[:0]
 }
 
 func (f *File) Date() time.Time {
@@ -252,7 +256,11 @@ func (m *MasterNode) nodeStat() string {
 
 func (m *MasterNode) stopNode() int {
 	rand.Seed(time.Now().UnixNano())
-	return rand.Intn(m.ROW - 1)
+	nodeID := rand.Intn(m.ROW - 1)
+	for _, entries := range m.files {
+		entries.StopNode(nodeID)
+	}
+	return nodeID
 }
 
 func (m *MasterNode) Read(fileName string) ([]ChunkEntry, error) {
@@ -311,6 +319,11 @@ func (m *MasterNode) handleConnection(conn net.Conn) {
 			m.encoder.Encode(err.Error())
 			break
 		}
+		if msg.Command == "killserver" {
+			// end process
+			m.encoder.Encode(fmt.Sprintf("%s server stopped running", m.serverName))
+			os.Exit(1)
+		}
 		m.handleClientCommands(&msg)
 
 	}
@@ -319,6 +332,9 @@ func (m *MasterNode) handleConnection(conn net.Conn) {
 
 func (m *MasterNode) handleClientCommands(msg *Message) {
 	switch msg.Command {
+	case "stopnode":
+		_ = m.encoder.Encode(m.stopNode())
+		break
 	case "stat":
 		stat, err := m.FileStat(msg.Args[0])
 		if err != nil {
@@ -332,11 +348,10 @@ func (m *MasterNode) handleClientCommands(msg *Message) {
 		_ = m.encoder.Encode(m.ListFiles())
 		log.Println(m.ListFiles())
 		break
-	case "dc":
+	case "diskcapacity":
 		_ = m.encoder.Encode(fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap()))
-		log.Println(fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap()))
 		break
-	case "rn":
+	case "rename":
 		err := m.Rename(msg.Args[0], msg.Args[1])
 		if err != nil {
 			_ = m.encoder.Encode(err.Error())
@@ -344,22 +359,30 @@ func (m *MasterNode) handleClientCommands(msg *Message) {
 			break
 		}
 		break
-	case "r":
+	case "read":
 		filename := msg.Args[0]
 		entries, err := m.Read(filename)
 		if err != nil {
 			_ = m.encoder.Encode(err.Error())
-			log.Printf("%v\n", entries)
 			break
 		}
 		_ = m.encoder.Encode(entries)
-		log.Printf("%v\n", entries)
 		break
-	case "w":
+	case "write":
 		filename := msg.Args[0]
 		entry := m.Write(filename)
-		_ = m.encoder.Encode(entry)
-		log.Printf("%v\n", entry)
+		// _ = m.encoder.Encode(entry)                                                           // use for real client
+		_ = m.encoder.Encode(fmt.Sprintf("file entry for %s has been updated", entry.Name())) // testing purposes
+		break
+	default:
+		go m.handleChunkServerConnection(msg)
+		break
+	}
+}
+
+func (m *MasterNode) handleChunkServerConnection(msg *Message) {
+	switch msg.Command {
+	case "updateFileEntry":
 		break
 	default:
 		_ = m.encoder.Encode(fmt.Errorf("%s is not a valid command", msg.Command))

@@ -2,14 +2,17 @@ Major:
     Client Interface:
         implement client interface 
 
+    Chunk Node Interface:
+        implement chunk node interface
+    
     MetaData Server:
-        handle command requests(ie filestat, getdiskcap etc.) from client to metadata server 
+        handle command requests(ie filestat, getdiskcap etc.) from client to metadata server - done 
 
     Chunk Server:
-        handle command requests(ie read, write.) from client to chunk server
-
+        handle command requests(ie read, write.) from client to chunk server - done
+ 
     Data Replication:
-        implement algorithm for creating copies of file chunk entries recorded in master server
+        implement algorithm for creating copies of file chunk entries recorded in master server - done
 
     Node Allocation:
         implement node selection algorithm for replication file chunks 

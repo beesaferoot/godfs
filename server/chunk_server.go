@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type Copy struct {
@@ -21,7 +23,7 @@ type Chunk interface {
 	GetMaxSize() int
 	Read() []byte
 	Write([]byte)
-	Delete()
+	// Delete()
 }
 
 type ChunkFile struct {
@@ -56,7 +58,7 @@ type ChunkServer struct {
 type DataNode interface {
 	GetSize() int
 	Run()
-	Write(int, []byte)
+	Write(int, []byte) int
 	Kill(bool)
 	Read(int) string
 	Delete(int) (bool, error)
@@ -84,9 +86,9 @@ func (c ChunkFile) Write(fragment []byte) {
 	c.data = fragment
 }
 
-func (c ChunkFile) Delete() {
-	c.data = make([]byte, c.GetMaxSize())
-}
+// func (c ChunkFile) Delete() {
+// 	c.data = make([]byte, c.GetMaxSize())
+// }
 
 func (c ChunkFile) GetMaxSize() int {
 	return c.maxSize
@@ -201,7 +203,7 @@ func (c *ChunkServer) handleClientCommands(msg *Message) {
 			_ = c.encoder.Encode(err.Error())
 			break
 		}
-		go c.handleWriteConnection(&entry)
+		go c.handleWriteConnection(entry)
 		break
 	case "k":
 		nodeID, _ := strconv.Atoi(msg.Args[0])
@@ -209,33 +211,90 @@ func (c *ChunkServer) handleClientCommands(msg *Message) {
 	}
 }
 
-func (c *ChunkServer) handleReadConnection(entries *[]ChunkEntry){
+func (c *ChunkServer) handleReadConnection(entries *[]ChunkEntry) {
 	var fileString string
-		var foundvalidCopy bool
-		for _, entry := range *entries{
-			foundvalidCopy = false
-			copies := entry.Read()
-			for _, copy := range copies {
-				if copy.valid{
-					foundvalidCopy = true
-					fileString += c.nodes[copy.node].Read(copy.addr)
-					break
-				}
-			}
-			if !foundvalidCopy{
-				_ = c.encoder.Encode(fmt.Errorf("missing chunk for the specified"))
+	var foundvalidCopy bool
+	for _, entry := range *entries {
+		foundvalidCopy = false
+		copies := entry.Read()
+		for _, copy := range copies {
+			if copy.valid {
+				foundvalidCopy = true
+				fileString += c.nodes[copy.node].Read(copy.addr)
 				break
 			}
 		}
-		_ = c.encoder.Encode(fileString)
+		if !foundvalidCopy {
+			_ = c.encoder.Encode(fmt.Errorf("missing chunk for the specified"))
+			break
+		}
+	}
+	_ = c.encoder.Encode(fileString)
 }
 
-func (c *ChunkServer) handleWriteConnection(entry *FileEntry){
+func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
+	var buf = make([]byte, c.CHUNKSIZE)
+	var chunkCopies []Copy
+	// ensure no chunk copies exists for this file entry
+	for _, chunk := range entry.Read() {
+		copies := chunk.Read()
+		if len(copies) > 0 {
+			for _, copy := range copies {
+				_, _ = c.nodes[copy.node].Delete(copy.addr)
+			}
+		}
+	}
+	entry.DeleteChunks()
+	var err error
+	rand.Seed(time.Now().UnixNano())
+	nodeID := rand.Intn(len(c.nodes) - 1)
+
+	for {
+		err = c.decoder.Decode(&buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Println("decode error: ", err.Error())
+			break
+		}
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID, buf))
+		of1, of2 := c.computeReplica(nodeID)
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of1, buf))
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of2, buf))
+		entry.Write(nodeID, &chunkCopies)
+	}
+	go func() {
+		err = c.sendMsg(&Message{Command: "updateFileEntry"})
+		if err != nil {
+			log.Println(err.Error())
+		}
+		_ = c.encoder.Encode(entry.Read())
+	}()
 
 }
 
-func (c *ChunkServer) handleKillConnection(nodeID int){
+func (c *ChunkServer) handleKillConnection(nodeID int) {
 	node := c.nodes[nodeID]
 	node.Kill(true)
 	_ = c.encoder.Encode(fmt.Sprintf("node with id %d successfully killed", nodeID))
+}
+
+func (c *ChunkServer) hanleDataWrite(nodeID int, data []byte) Copy {
+	node := c.nodes[nodeID]
+	addr := node.Write(nodeID, data)
+	return Copy{node: nodeID, addr: addr, valid: true}
+}
+
+func (c *ChunkServer) computeReplica(nodeID int) (int, int) {
+
+	offset1 := 1
+	offset2 := c.NODEPERRACK
+	if (nodeID-offset1) > 0 && (nodeID-offset1) < c.RACKNUMBER {
+		offset1 = -offset1
+	}
+	if (nodeID-offset2) > 0 && (nodeID-offset2) < c.RACKNUMBER {
+		offset2 = -offset2
+	}
+	return offset1, offset2
 }

@@ -1,51 +1,67 @@
 package main
 
 import (
-	"bufio"
 	"encoding/gob"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
-	"strings"
-	"time"
 
 	"./server"
 )
 
 func main() {
 	// testing metadata server
-	masterNode := server.NewMasterNode("metadata", map[string]interface{}{"port": 8000})
-	os.Setenv("META_SERVER_PORT", strconv.Itoa(masterNode.PORT))
 
-	go masterNode.Run()
-	time.Sleep(time.Second * 2)
-	createConnection()
+	if len(os.Args) > 1 {
+		portString := os.Getenv("META_SERVER_PORT")
+		if len(portString) == 0 {
+			log.Fatal("META_SERVER_PORT environment variable is not set")
+		}
+		if os.Args[1] == "startserver" {
+			port, _ := strconv.Atoi(portString)
+			masterNode := server.NewMasterNode("metadata", map[string]interface{}{"port": port})
+			masterNode.Run()
+
+		} else if os.Args[1] == "start" {
+			cmd := exec.Command("./main", "startserver", os.Getenv("META_SERVER_PORT"), "&")
+			cmd.Stdout = os.Stdout
+			if err := cmd.Start(); err != nil {
+				log.Fatal(err.Error())
+			}
+			os.Exit(1)
+		} else {
+			createConnection(os.Args)
+		}
+
+	} else {
+		fmt.Println("usuage: ./main start")
+	}
+
 }
 
-func createConnection() {
+func createConnection(args []string) {
 	conn, err := net.Dial("tcp", ":"+os.Getenv("META_SERVER_PORT"))
 	if err != nil {
 		log.Fatalln(err.Error())
 	}
-	log.Printf("connected to network")
 	defer conn.Close()
 
 	enc := gob.NewEncoder(conn)
-	buf := bufio.NewScanner(os.Stdin)
-
-	for {
-		if ok := buf.Scan(); !ok {
-			log.Fatalln(err.Error())
-		}
-
-		message := strings.Split(buf.Text(), " ")
-		fmt.Println(message)
-		err := enc.Encode(server.Message{Command: message[0], Args: message[1:]})
-		if err != nil {
-			log.Fatalln(err.Error())
-		}
+	dec := gob.NewDecoder(conn)
+	err = enc.Encode(server.Message{Command: args[1], Args: args[2:]})
+	if err != nil {
+		log.Fatalln(err.Error())
 	}
-
+	var returnMsg string
+	err = dec.Decode(&returnMsg)
+	if err != nil {
+		if err == io.EOF {
+		}
+		log.Fatal("decode error: ", err.Error())
+	}
+	log.Println(returnMsg)
 }
