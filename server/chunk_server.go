@@ -23,7 +23,7 @@ type Chunk interface {
 	GetMaxSize() int
 	Read() []byte
 	Write([]byte)
-	// Delete()
+	Size() int
 }
 
 type ChunkFile struct {
@@ -58,8 +58,8 @@ type ChunkServer struct {
 type DataNode interface {
 	GetSize() int
 	Run()
-	Write(int, []byte) int
-	Kill(bool)
+	Write(int, <-chan []byte) int
+	Kill()
 	Read(int) string
 	Delete(int) (bool, error)
 	IsRunning() bool
@@ -71,26 +71,30 @@ type Node struct {
 	count    int
 	isKilled bool
 	content  []Chunk
-	mutex    sync.RWMutex
+	mutex    sync.Mutex
 }
 
 func (c *Copy) stopNode() {
 	c.valid = false
 }
 
-func (c ChunkFile) Read() []byte {
+func (c *ChunkFile) Read() []byte {
 	return c.data
 }
 
-func (c ChunkFile) Write(fragment []byte) {
+func (c *ChunkFile) Write(fragment []byte) {
 	c.data = fragment
+}
+
+func (c *ChunkFile) Size() int {
+	return len(c.data)
 }
 
 // func (c ChunkFile) Delete() {
 // 	c.data = make([]byte, c.GetMaxSize())
 // }
 
-func (c ChunkFile) GetMaxSize() int {
+func (c *ChunkFile) GetMaxSize() int {
 	return c.maxSize
 }
 
@@ -187,7 +191,7 @@ func (c *ChunkServer) handleConnection(conn net.Conn) {
 func (c *ChunkServer) handleClientCommands(msg *Message) {
 	var err error
 	switch msg.Command {
-	case "r":
+	case "read":
 		var entries []ChunkEntry
 		err = c.decoder.Decode(&entries)
 		if err != nil {
@@ -196,7 +200,7 @@ func (c *ChunkServer) handleClientCommands(msg *Message) {
 		}
 		go c.handleReadConnection(&entries)
 		break
-	case "w":
+	case "write":
 		var entry FileEntry
 		err = c.decoder.Decode(&entry)
 		if err != nil {
@@ -205,9 +209,14 @@ func (c *ChunkServer) handleClientCommands(msg *Message) {
 		}
 		go c.handleWriteConnection(entry)
 		break
-	case "k":
+	case "killnode":
 		nodeID, _ := strconv.Atoi(msg.Args[0])
 		go c.handleKillConnection(nodeID)
+	case "killserver":
+		os.Exit(1)
+		break
+	default:
+		break
 	}
 }
 
@@ -234,6 +243,7 @@ func (c *ChunkServer) handleReadConnection(entries *[]ChunkEntry) {
 
 func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 	var buf = make([]byte, c.CHUNKSIZE)
+	dataChannel := make(chan []byte, 3)
 	var chunkCopies []Copy
 	// ensure no chunk copies exists for this file entry
 	for _, chunk := range entry.Read() {
@@ -246,8 +256,7 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 	}
 	entry.DeleteChunks()
 	var err error
-	rand.Seed(time.Now().UnixNano())
-	nodeID := rand.Intn(len(c.nodes) - 1)
+	nodeID := c.pickWriteNode()
 
 	for {
 		err = c.decoder.Decode(&buf)
@@ -258,10 +267,14 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 			log.Println("decode error: ", err.Error())
 			break
 		}
-		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID, buf))
+		// add 3 copies of buffered chunk
+		dataChannel <- buf
+		dataChannel <- buf
+		dataChannel <- buf
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID, dataChannel))
 		of1, of2 := c.computeReplica(nodeID)
-		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of1, buf))
-		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of2, buf))
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of1, dataChannel))
+		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of2, dataChannel))
 		entry.Write(nodeID, &chunkCopies)
 	}
 	go func() {
@@ -276,13 +289,14 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 
 func (c *ChunkServer) handleKillConnection(nodeID int) {
 	node := c.nodes[nodeID]
-	node.Kill(true)
+	node.Kill()
 	_ = c.encoder.Encode(fmt.Sprintf("node with id %d successfully killed", nodeID))
 }
 
-func (c *ChunkServer) hanleDataWrite(nodeID int, data []byte) Copy {
+func (c *ChunkServer) hanleDataWrite(nodeID int, dataChannel <-chan []byte) Copy {
+
 	node := c.nodes[nodeID]
-	addr := node.Write(nodeID, data)
+	addr := node.Write(nodeID, dataChannel)
 	return Copy{node: nodeID, addr: addr, valid: true}
 }
 
@@ -297,4 +311,57 @@ func (c *ChunkServer) computeReplica(nodeID int) (int, int) {
 		offset2 = -offset2
 	}
 	return offset1, offset2
+}
+
+func (c *ChunkServer) pickWriteNode() int {
+
+	rand.Seed(time.Now().UnixNano())
+	var availableNodes []int
+
+	for index, node := range c.nodes {
+		if node.IsRunning() {
+			availableNodes = append(availableNodes, index)
+		}
+	}
+
+	return availableNodes[rand.Intn(len(availableNodes)-1)]
+
+}
+
+func (n *Node) GetSize() int {
+	var size int
+	for _, chunk := range n.content {
+		size += chunk.Size()
+	}
+	return size
+}
+
+func (n *Node) Run() {
+	n.isKilled = false
+}
+
+func (n *Node) Read(offset int) string {
+	return string(n.content[offset].Read())
+}
+
+func (n *Node) Kill() {
+	n.isKilled = true
+}
+
+func (n *Node) Delete(addr int) (bool, error) {
+	n.mutex.Lock()
+	n.content[addr] = n.content[len(n.content)-1]
+	n.content = n.content[:len(n.content)-1]
+	n.mutex.Unlock()
+	return true, nil
+}
+
+func (n *Node) Write(nodeID int, dataChannel <-chan []byte) int {
+	data := <-dataChannel
+	n.content[nodeID].Write(data)
+	return len(n.content) - 1
+}
+
+func (n *Node) IsRunning() bool {
+	return !n.isKilled
 }

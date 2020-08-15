@@ -333,46 +333,89 @@ func (m *MasterNode) handleConnection(conn net.Conn) {
 func (m *MasterNode) handleClientCommands(msg *Message) {
 	switch msg.Command {
 	case "stopnode":
-		_ = m.encoder.Encode(m.stopNode())
+		var rmsg struct {
+			Result int
+			Err    error
+		}
+		rmsg.Result = m.stopNode()
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
 		break
 	case "stat":
 		stat, err := m.FileStat(msg.Args[0])
-		if err != nil {
-			_ = m.encoder.Encode(err.Error())
-			log.Println(err.Error())
+		var rmsg struct {
+			Result string
+			Err    error
 		}
-		_ = m.encoder.Encode(stat)
-		log.Println(stat)
+
+		if err != nil {
+			rmsg.Err = err
+			_ = m.encoder.Encode(rmsg)
+			// log.Println(err.Error())
+		}
+		rmsg.Result = stat
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
+		// log.Println(stat)
 		break
 	case "ls":
-		_ = m.encoder.Encode(m.ListFiles())
-		log.Println(m.ListFiles())
+		var rmsg struct {
+			Result string
+			Err    error
+		}
+		rmsg.Result = m.ListFiles()
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
+		// log.Println(m.ListFiles())
 		break
 	case "diskcapacity":
-		_ = m.encoder.Encode(fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap()))
+		var rmsg struct {
+			Result string
+			Err    error
+		}
+		rmsg.Result = fmt.Sprintf("total diskcapacity: %d", m.GetDiskCap())
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
 		break
 	case "rename":
+		var rmsg struct {
+			Err error
+		}
 		err := m.Rename(msg.Args[0], msg.Args[1])
 		if err != nil {
-			_ = m.encoder.Encode(err.Error())
-			log.Println(err.Error())
+			rmsg.Err = err
+			_ = m.encoder.Encode(rmsg)
+			// log.Println(err.Error())
 			break
 		}
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
 		break
 	case "read":
+		var rmsg struct {
+			Result []ChunkEntry
+			Err    error
+		}
 		filename := msg.Args[0]
 		entries, err := m.Read(filename)
 		if err != nil {
-			_ = m.encoder.Encode(err.Error())
+			rmsg.Err = err
+			_ = m.encoder.Encode(rmsg)
 			break
 		}
-		_ = m.encoder.Encode(entries)
+		rmsg.Result = entries
+		rmsg.Err = nil
+		_ = m.encoder.Encode(rmsg)
 		break
 	case "write":
+		var rmsg struct {
+			Result FileEntry
+			Err    error
+		}
 		filename := msg.Args[0]
 		entry := m.Write(filename)
-		// _ = m.encoder.Encode(entry)                                                           // use for real client
-		_ = m.encoder.Encode(fmt.Sprintf("file entry for %s has been updated", entry.Name())) // testing purposes
+		rmsg.Result = entry
+		_ = m.encoder.Encode(rmsg)
 		break
 	default:
 		go m.handleChunkServerConnection(msg)
@@ -385,7 +428,11 @@ func (m *MasterNode) handleChunkServerConnection(msg *Message) {
 	case "updateFileEntry":
 		break
 	default:
-		_ = m.encoder.Encode(fmt.Errorf("%s is not a valid command", msg.Command))
+		var rmsg struct {
+			Err error
+		}
+		rmsg.Err = fmt.Errorf("%s is not a valid command", msg.Command)
+		_ = m.encoder.Encode(rmsg)
 		break
 	}
 }

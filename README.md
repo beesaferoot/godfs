@@ -16,5 +16,6 @@ While the design is based on the above paper, this implementation leverages conc
 
 ## Contributions
 - are you interested in distributed systems? 
-- or what to learn about file systems? 
+- or want to learn about file systems? 
+- testing of modules.
 Contributions are welcomed, hope to expand on this project. 
