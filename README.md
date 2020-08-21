@@ -11,9 +11,24 @@ This implementation is based on the research paper [DFS_simulation_14m.pdf](http
 ## Implementation differences 
 While the design is based on the above paper, this implementation leverages concurrency benefits in the [go programming language](https://tour.golang.org/list).
 
-## TODO 
-* client usuage should be described here
+## Usuage 
+    usuage: ./goSimDFS [help] <command> [<args>]
 
+  - export environment variables
+   - `` export META_SERVER_PORT=$(PORT)``
+   - `` export CHUNK_SERVER_PORT=$(PORT)``
+
+  - start filesystem servers
+    - `` ./goSimDFS start ``
+
+  - run commands 
+    - `` ./goSimDFS <command> [args]``
+
+## Build 
+    go build 
+
+## Requirement 
+    this project requires a unix-like shell to work properly.
 ## Contributions
 - are you interested in distributed systems? 
 - or want to learn about file systems? 

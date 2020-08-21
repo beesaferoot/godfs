@@ -14,9 +14,10 @@ import (
 )
 
 type Copy struct {
-	node  int
-	addr  int
-	valid bool
+	Node  int
+	Addr  int
+	Valid bool
+	Size  int
 }
 
 type Chunk interface {
@@ -33,13 +34,15 @@ type ChunkFile struct {
 }
 
 type ChunkEntry interface {
+	Id() int
 	Read() []Copy
 	stopNode(int)
+	Size() int
 }
 
 type ChunkMetadata struct {
-	index  int
-	copies []Copy
+	Index  int
+	Copies []Copy
 }
 
 type ChunkServer struct {
@@ -48,7 +51,6 @@ type ChunkServer struct {
 	CHUNKSIZE   int
 	NODEPERRACK int
 	RACKNUMBER  int
-	data        string
 	nodes       []DataNode
 	PORT        int
 	encoder     *gob.Encoder
@@ -58,7 +60,7 @@ type ChunkServer struct {
 type DataNode interface {
 	GetSize() int
 	Run()
-	Write(int, <-chan []byte) int
+	Write(<-chan []byte) (int, int)
 	Kill()
 	Read(int) string
 	Delete(int) (bool, error)
@@ -75,7 +77,7 @@ type Node struct {
 }
 
 func (c *Copy) stopNode() {
-	c.valid = false
+	c.Valid = false
 }
 
 func (c *ChunkFile) Read() []byte {
@@ -90,18 +92,14 @@ func (c *ChunkFile) Size() int {
 	return len(c.data)
 }
 
-// func (c ChunkFile) Delete() {
-// 	c.data = make([]byte, c.GetMaxSize())
-// }
-
 func (c *ChunkFile) GetMaxSize() int {
 	return c.maxSize
 }
 
 func (c *ChunkMetadata) stopNode(nodeID int) {
 
-	for _, chunkCopy := range c.copies {
-		if chunkCopy.node == nodeID {
+	for _, chunkCopy := range c.Copies {
+		if chunkCopy.Node == nodeID {
 			chunkCopy.stopNode()
 			break
 		}
@@ -109,11 +107,38 @@ func (c *ChunkMetadata) stopNode(nodeID int) {
 }
 
 func (c *ChunkMetadata) Read() []Copy {
-	return c.copies
+	return c.Copies
+}
+
+func (c *ChunkMetadata) Id() int {
+	return c.Index
+}
+
+func (c *ChunkMetadata) Size() int {
+	if len(c.Copies) > 0 {
+		return c.Copies[0].Size
+	}
+	return 0
+}
+
+func NewChunkServer(serverName string, serverConfig map[string]interface{}) *ChunkServer {
+
+	var newChunkServer = ChunkServer{serverName: serverName}
+	portString, _ := serverConfig["port"].(string)
+	newChunkServer.PORT, _ = strconv.Atoi(portString)
+	newChunkServer.NODEPERRACK, _ = serverConfig["NO_PER_RACK"].(int)
+	newChunkServer.CHUNKSIZE, _ = serverConfig["chunksize"].(int)
+	nodesCount, _ := serverConfig["nodes"].(int)
+	newChunkServer.RACKNUMBER = nodesCount / newChunkServer.NODEPERRACK
+
+	for i := 0; i < serverConfig["nodes"].(int); i++ {
+		newChunkServer.nodes = append(newChunkServer.nodes, &Node{})
+	}
+	return &newChunkServer
 }
 
 func (c *ChunkServer) sendMsg(msg *Message) error {
-	conn, err := net.Dial("tcp", fmt.Sprintf(":%s", os.Getenv("META_SERVER_PORT")))
+	conn, err := net.Dial("tcp", ":"+os.Getenv("META_SERVER_PORT"))
 	defer conn.Close()
 	if err != nil {
 		return err
@@ -135,7 +160,6 @@ func (c *ChunkServer) Run() {
 		log.Fatalf("unable to start %s server: %v\n", c.serverName, err.Error())
 	}
 	fmt.Printf("starting %v server at port %d\n", c.serverName, c.PORT)
-	fmt.Printf("listening on port %d\n", c.PORT)
 
 	for {
 		conn, err := c.socket.Accept()
@@ -151,12 +175,12 @@ func (c *ChunkServer) Run() {
 
 func (c *ChunkServer) GetInfo() string {
 
-	return fmt.Sprintf(`server type:          %s server
-					   total avialable nodes: %d
-					   nodes per rack:        %d
-					   total available racks: %d
-					   running nodes:         %d`,
-		c.serverName, len(c.nodes), c.RACKNUMBER, c.NODEPERRACK,
+	return fmt.Sprintf(`server type: %s server
+total avialable nodes: %d
+nodes per rack:        %d
+total available racks: %d
+running nodes:         %d`,
+		c.serverName, len(c.nodes), c.NODEPERRACK, c.RACKNUMBER,
 		c.RunningNodes())
 }
 
@@ -181,7 +205,6 @@ func (c *ChunkServer) handleConnection(conn net.Conn) {
 				break
 			}
 			log.Println("decode error: ", err.Error())
-			c.encoder.Encode(err.Error())
 			break
 		}
 		c.handleClientCommands(&msg)
@@ -192,53 +215,74 @@ func (c *ChunkServer) handleClientCommands(msg *Message) {
 	var err error
 	switch msg.Command {
 	case "read":
-		var entries []ChunkEntry
-		err = c.decoder.Decode(&entries)
-		if err != nil {
-			c.encoder.Encode(err.Error())
-			break
-		}
-		go c.handleReadConnection(&entries)
-		break
-	case "write":
-		var entry FileEntry
+		var entry File
 		err = c.decoder.Decode(&entry)
 		if err != nil {
-			_ = c.encoder.Encode(err.Error())
+			if err != io.EOF {
+				log.Println(err.Error())
+			}
 			break
 		}
-		go c.handleWriteConnection(entry)
+		c.handleReadConnection(entry.Read())
+		break
+	case "write":
+		var entry File
+		err = c.decoder.Decode(&entry)
+		if err != nil {
+			log.Println(err.Error())
+			break
+		}
+		c.handleWriteConnection(&entry)
 		break
 	case "killnode":
 		nodeID, _ := strconv.Atoi(msg.Args[0])
-		go c.handleKillConnection(nodeID)
-	case "killserver":
-		os.Exit(1)
+		c.handleKillConnection(nodeID)
+		break
+	case "nodestat":
+		var rmsg struct {
+			Result string
+			Err    string
+		}
+		rmsg.Result = c.GetInfo()
+		err = c.encoder.Encode(rmsg)
+		if err != nil {
+			log.Println(err.Error())
+		}
 		break
 	default:
 		break
 	}
 }
 
-func (c *ChunkServer) handleReadConnection(entries *[]ChunkEntry) {
+func (c *ChunkServer) handleReadConnection(entries []ChunkEntry) {
 	var fileString string
 	var foundvalidCopy bool
-	for _, entry := range *entries {
+	var err error
+	for _, entry := range entries {
 		foundvalidCopy = false
 		copies := entry.Read()
 		for _, copy := range copies {
-			if copy.valid {
+			if copy.Valid {
 				foundvalidCopy = true
-				fileString += c.nodes[copy.node].Read(copy.addr)
+				fileString += c.nodes[copy.Node].Read(copy.Addr)
 				break
 			}
 		}
 		if !foundvalidCopy {
-			_ = c.encoder.Encode(fmt.Errorf("missing chunk for the specified"))
+			err = c.encoder.Encode("no valid chunk data found for file entry")
+			if err != nil {
+				log.Println(err.Error())
+			}
 			break
 		}
 	}
-	_ = c.encoder.Encode(fileString)
+	if err == nil {
+		err := c.encoder.Encode(fileString)
+		if err != nil {
+			log.Println(err.Error())
+		}
+	}
+
 }
 
 func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
@@ -250,14 +294,18 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 		copies := chunk.Read()
 		if len(copies) > 0 {
 			for _, copy := range copies {
-				_, _ = c.nodes[copy.node].Delete(copy.addr)
+				ok, err := c.nodes[copy.Node].Delete(copy.Addr)
+				if ok {
+					log.Println("deleted chunk copy at address ", copy.Addr)
+				} else {
+					log.Println(err.Error())
+				}
 			}
 		}
 	}
 	entry.DeleteChunks()
 	var err error
 	nodeID := c.pickWriteNode()
-
 	for {
 		err = c.decoder.Decode(&buf)
 		if err != nil {
@@ -273,43 +321,66 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 		dataChannel <- buf
 		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID, dataChannel))
 		of1, of2 := c.computeReplica(nodeID)
-		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of1, dataChannel))
-		chunkCopies = append(chunkCopies, c.hanleDataWrite(nodeID+of2, dataChannel))
-		entry.Write(nodeID, &chunkCopies)
+		chunkCopies = append(chunkCopies, c.hanleDataWrite((nodeID+of1)%len(c.nodes), dataChannel))
+		chunkCopies = append(chunkCopies, c.hanleDataWrite((nodeID+of2)%len(c.nodes), dataChannel))
+		entry.Write(nodeID, chunkCopies)
 	}
-	go func() {
-		err = c.sendMsg(&Message{Command: "updateFileEntry"})
-		if err != nil {
-			log.Println(err.Error())
-		}
-		_ = c.encoder.Encode(entry.Read())
-	}()
 
+	c.updateFileEntry(entry)
+}
+
+func (c *ChunkServer) updateFileEntry(entry FileEntry) {
+	var cmd = &Message{Command: "updateFileEntry", Args: []string{entry.GetName()}}
+	conn, err := net.Dial("tcp", ":"+os.Getenv("META_SERVER_PORT"))
+	defer conn.Close()
+	if err != nil {
+		log.Println(err.Error())
+	}
+	enc := gob.NewEncoder(conn)
+	err = enc.Encode(cmd)
+	if err != nil {
+		log.Println(err.Error())
+	}
+	var msg struct {
+		Entry *File
+	}
+
+	msg.Entry, _ = entry.(*File)
+	gob.Register(msg.Entry.Chunks[0])
+	err = enc.Encode(msg)
+	if err != nil {
+		log.Println(err.Error())
+	}
 }
 
 func (c *ChunkServer) handleKillConnection(nodeID int) {
+	var rmsg struct {
+		Result string
+		Err    string
+	}
 	node := c.nodes[nodeID]
 	node.Kill()
-	_ = c.encoder.Encode(fmt.Sprintf("node with id %d successfully killed", nodeID))
+	rmsg.Result = fmt.Sprintf("node with id %d successfully killed", nodeID)
+	_ = c.encoder.Encode(rmsg)
 }
 
 func (c *ChunkServer) hanleDataWrite(nodeID int, dataChannel <-chan []byte) Copy {
-
 	node := c.nodes[nodeID]
-	addr := node.Write(nodeID, dataChannel)
-	return Copy{node: nodeID, addr: addr, valid: true}
+	addr, size := node.Write(dataChannel)
+	return Copy{Node: nodeID, Addr: addr, Valid: true, Size: size}
 }
 
 func (c *ChunkServer) computeReplica(nodeID int) (int, int) {
 
 	offset1 := 1
-	offset2 := c.NODEPERRACK
-	if (nodeID-offset1) > 0 && (nodeID-offset1) < c.RACKNUMBER {
+	offset2 := c.NODEPERRACK - 1
+	if (nodeID+offset1) >= len(c.nodes) && (nodeID-offset1) >= 0 {
 		offset1 = -offset1
 	}
-	if (nodeID-offset2) > 0 && (nodeID-offset2) < c.RACKNUMBER {
-		offset2 = -offset2
+	if (nodeID+offset2) >= len(c.nodes) && (offset2-nodeID) >= 0 {
+		offset2 = offset2 - nodeID
 	}
+
 	return offset1, offset2
 }
 
@@ -323,7 +394,6 @@ func (c *ChunkServer) pickWriteNode() int {
 			availableNodes = append(availableNodes, index)
 		}
 	}
-
 	return availableNodes[rand.Intn(len(availableNodes)-1)]
 
 }
@@ -349,17 +419,28 @@ func (n *Node) Kill() {
 }
 
 func (n *Node) Delete(addr int) (bool, error) {
+	var err error
 	n.mutex.Lock()
-	n.content[addr] = n.content[len(n.content)-1]
-	n.content = n.content[:len(n.content)-1]
+	if len(n.content) > addr {
+		n.content[addr] = n.content[len(n.content)-1]
+		n.content = n.content[:len(n.content)-1]
+		err = nil
+	} else {
+		err = fmt.Errorf("invalid chunk address at %d", addr)
+	}
 	n.mutex.Unlock()
+	if err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
-func (n *Node) Write(nodeID int, dataChannel <-chan []byte) int {
+func (n *Node) Write(dataChannel <-chan []byte) (int, int) {
 	data := <-dataChannel
-	n.content[nodeID].Write(data)
-	return len(n.content) - 1
+	var chunk ChunkFile
+	chunk.Write(data)
+	n.content = append(n.content, &chunk)
+	return len(n.content) - 1, cap(data)
 }
 
 func (n *Node) IsRunning() bool {
