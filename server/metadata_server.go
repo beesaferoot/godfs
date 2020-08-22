@@ -195,6 +195,8 @@ func (m *MasterNode) Rename(oldFileName string, newFileName string) error {
 
 	if entry, ok := m.files[oldFileName]; ok {
 		entry.Rename(newFileName)
+		m.files[newFileName] = entry
+		delete(m.files, oldFileName)
 		return nil
 	}
 
