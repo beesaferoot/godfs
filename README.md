@@ -11,8 +11,8 @@ This implementation is based on the research paper [DFS_simulation_14m.pdf](http
 ## Implementation differences 
 While the design is based on the above paper, this implementation leverages concurrency benefits in the [go programming language](https://tour.golang.org/list).
 
-## Usuage 
-    usuage: ./goSimDFS [help] <command> [<args>]
+## Usage 
+    usage: ./goSimDFS [help] <command> [<args>]
 
   - export environment variables
    - `` export META_SERVER_PORT=$(PORT)``
