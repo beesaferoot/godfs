@@ -11,7 +11,7 @@ import (
 	"strconv"
 )
 
-var HELP_MESSAGE = fmt.Sprintf(`usuage: %s [help] <command> [<args>]
+var HELP_MESSAGE = fmt.Sprintf(`usage: %s [help] <command> [<args>]
 general commands:
 help - display this help message 
 
@@ -24,7 +24,7 @@ read <filename> - display content of specified filename
 
 write <filename> - create file entry from specified filename on local disk
 
-ls <filename> - list available files
+ls - list available files
 
 stat <filename> - fetch info of file with specified filename
 
