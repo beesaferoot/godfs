@@ -131,7 +131,7 @@ func NewChunkServer(serverName string, serverConfig map[string]interface{}) *Chu
 	nodesCount, _ := serverConfig["nodes"].(int)
 	newChunkServer.RACKNUMBER = nodesCount / newChunkServer.NODEPERRACK
 
-	for i := 0; i < serverConfig["nodes"].(int); i++ {
+	for i := 0; i < nodesCount; i++ {
 		newChunkServer.nodes = append(newChunkServer.nodes, &Node{})
 	}
 	return &newChunkServer
