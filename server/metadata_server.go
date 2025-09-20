@@ -169,10 +169,10 @@ func (m *MasterNode) ListFiles() string {
 }
 func (m *MasterNode) sendMsg(msg *Message) error {
 	conn, err := net.Dial("tcp", ":"+os.Getenv("CHUNK_SERVER_PORT"))
-	defer conn.Close()
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 	m.encoder = gob.NewEncoder(conn)
 	err = m.encoder.Encode(msg)
 	if err != nil {

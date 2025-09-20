@@ -139,10 +139,10 @@ func NewChunkServer(serverName string, serverConfig map[string]interface{}) *Chu
 
 func (c *ChunkServer) sendMsg(msg *Message) error {
 	conn, err := net.Dial("tcp", ":"+os.Getenv("META_SERVER_PORT"))
-	defer conn.Close()
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 	enc := gob.NewEncoder(conn)
 	err = enc.Encode(msg)
 	if err != nil {
@@ -332,10 +332,10 @@ func (c *ChunkServer) handleWriteConnection(entry FileEntry) {
 func (c *ChunkServer) updateFileEntry(entry FileEntry) {
 	var cmd = &Message{Command: "updateFileEntry", Args: []string{entry.GetName()}}
 	conn, err := net.Dial("tcp", ":"+os.Getenv("META_SERVER_PORT"))
-	defer conn.Close()
 	if err != nil {
 		log.Println(err.Error())
 	}
+	defer conn.Close()
 	enc := gob.NewEncoder(conn)
 	err = enc.Encode(cmd)
 	if err != nil {
